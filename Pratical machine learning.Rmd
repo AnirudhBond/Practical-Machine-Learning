@@ -1,0 +1,103 @@
+---
+title: "Practical M/C Learning"
+author: "Anirudh Jain"
+---
+### Executive Summary
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, our goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants and build a model to predict classe.
+
+### Libraries Included
+```{r,cache=TRUE,warning=FALSE,results='hide',message=FALSE}
+library(tidyselect)
+library(factoextra)
+library(FactoMineR)
+library(rlang)
+library(graphics)
+library(ggplot2)
+library(caret)
+library(rattle)
+library(parallel)
+library(doParallel)
+```
+
+### Data Loading & Preparation
+Training data is  divided into training & validation data; near zero  & NA predictors are removed. 160 predictors are reduced to only 53 predictors.
+```{r,cache=TRUE,warning=FALSE}
+train <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"),header=TRUE)
+test <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"),header=TRUE)
+
+## dividing train into training & validate 
+set.seed(7)
+intrain <- createDataPartition(train$classe,p=0.7,list = FALSE)
+training <- train[intrain,]
+validate <- train[-intrain,]
+
+## removing near zero variate variables from training,validate & test
+nzv <- nearZeroVar(training)
+training_nzv <- training[,-nzv]
+validate_nzv <- validate[,-nzv]
+test_nzv <- test[,-nzv] 
+##since classe varible is last, nzv indices will correctly fit the test data
+
+## removing columns with NA values constituting more than 90% of responses.
+inNA <- which(colSums(is.na((training_nzv)))>=.9*nrow(training_nzv))
+training_tidy <- training_nzv[,-inNA]
+validate_tidy <- validate_nzv[,-inNA]
+test_tidy <- test_nzv[,-inNA]
+
+## Removing first 6 columns not required for prediction.
+training_tidy <- training_tidy[,-(1:6)]
+validate_tidy <- validate_tidy[,-(1:6)]
+test_tidy <- test_tidy[,-(1:6)]
+```
+
+### Data Exploration & Pre-processing
+Principal component analysis is done to further reduce the predictors. Scree plot shows the variance explained by the first couple of components is very less. This means the correlation between predictors is not significantly high. Hence we will go with 53 predictors to build our model
+
+Preprocessing is done to standardize the data and cross validation training control is set.
+```{r, cache=T,warning=F}
+## Principal Component analysis
+kaka <- PCA(training_tidy[,-53],graph = F)
+fviz_eig(kaka, xlab = "Principal Components", ylab ="Percentage of explained variance", addlabels = T )
+preObj <- preProcess(training_tidy[,-53],method = c("center","scale"))
+training_final <- predict(preObj,training_tidy[,-53])
+training_final <-data.frame(training_final,classe=training_tidy$classe)
+validate_final <- predict(preObj,validate_tidy[,-53])
+test_final <- predict(preObj,test_tidy)
+trControl <- trainControl(method="cv", number=5,allowParallel = TRUE)
+```
+
+### Modelling
+Three models are used - rpart, rf & gbm. Parrallel computing is used to speed up the computations. 
+
+The accuracy of rpart is 55%, rf is 99% & gbm is 95%. Therefore, rf method is used for final computations.
+```{r, cache=T,warning=F}
+##1 RPART
+model_rpart <- train(classe~., data=training_final, method="rpart", trControl=trControl,tuneLength = 6)
+fancyRpartPlot(model_rpart$finalModel,cex=.5)
+pred_rpart <- predict(model_rpart,validate_final)
+confusionMatrix(pred_rpart,validate_tidy$classe)[2:3]
+
+##2 RF
+## Parallel Processing to reduce time
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+model_rf <- train(classe~., data=training_final, method="rf",verbose = FALSE,trControl = trControl)
+plot(model_rf$finalModel,main = "Model error of Random forest model by number of trees")
+pred_rf <- predict(model_rf,validate_final)
+confusionMatrix(pred_rf,validate_tidy$classe)[2:3]
+varImp(model_rf)
+
+##3 GBM model
+model_gbm <- train(classe~., data=training_final, method="gbm", trControl=trControl, verbose=FALSE)
+plot(model_gbm)
+pred_gbm <- predict(model_gbm,validate_final)
+confusionMatrix(pred_gbm,validate_tidy$classe)[2:3]
+```
+
+### Prediction using the best model i.e. random forest model
+All 20 cases are predicted using the random forest model
+```{r, cache=T}
+pred_test <- predict(model_rf,test_final)
+pred_test
